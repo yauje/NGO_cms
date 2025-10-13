@@ -1,0 +1,83 @@
+# -----------------------------------------------------------------------------
+# General Operating System Files
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# -----------------------------------------------------------------------------
+# Python Specific Files
+# -----------------------------------------------------------------------------
+
+# Virtual environments
+# Ignore the environment folder itself, wherever it may be located
+.venv/
+venv/
+env/
+
+# Byte-code and compiled files
+__pycache__/
+*.py[cod]
+
+# Installer, testing, and distribution
+.pytest_cache/
+.tox/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Jupyter Notebook files
+.ipynb_checkpoints
+
+# -----------------------------------------------------------------------------
+# Environment and Configuration
+# -----------------------------------------------------------------------------
+
+# Your .env files, which contain sensitive secrets/credentials
+# This is a critical security exclusion.
+.env
+*/.env
+
+# Database files (if using a local SQLite/development database)
+*.sqlite
+*.db
+
+# Specific to your project's backend folder
+/backend/.env
+
+# -----------------------------------------------------------------------------
+# Docker & Containerization
+# -----------------------------------------------------------------------------
+# Ignore the volumes created by Docker Compose, if any
+volumes/
+
+# -----------------------------------------------------------------------------
+# IDE and Editor Specific Files
+# -----------------------------------------------------------------------------
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# PyCharm/IntelliJ
+.idea/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+
+
+Dockerfile
+docker-Compose.yml
+
+folders.ps1
+
+tree_generator.py
+tree.Text
+
+

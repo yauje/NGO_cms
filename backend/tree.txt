@@ -1,0 +1,72 @@
+backend/
+├── app
+│   ├── api
+│   │   ├── routes
+│   │   │   ├── audit_logs.py
+│   │   │   ├── auth.py
+│   │   │   ├── media.py
+│   │   │   ├── pages.py
+│   │   │   ├── page_blocks.py
+│   │   │   ├── settings.py
+│   │   │   ├── users.py
+│   │   │   └── __init__.py
+│   │   └── __init__.py
+│   ├── core
+│   │   ├── audit.py
+│   │   ├── auth_deps.py
+│   │   ├── config.py
+│   │   ├── dependencies.py
+│   │   ├── permissions.py
+│   │   ├── security.py
+│   │   └── __init__.py
+│   ├── crud
+│   │   ├── audit_logs.py
+│   │   ├── base.py
+│   │   ├── media.py
+│   │   ├── pages.py
+│   │   ├── page_blocks.py
+│   │   ├── settings.py
+│   │   ├── users.py
+│   │   └── __init__.py
+│   ├── db
+│   │   ├── migrations
+│   │   │   ├── versions
+│   │   │   ├── env.py
+│   │   │   ├── README
+│   │   │   └── script.py.mako
+│   │   ├── models
+│   │   │   ├── audit_log.py
+│   │   │   ├── media.py
+│   │   │   ├── page.py
+│   │   │   ├── page_block.py
+│   │   │   ├── page_revision.py
+│   │   │   ├── site_setting.py
+│   │   │   ├── user.py
+│   │   │   └── __init__.py
+│   │   ├── base.py
+│   │   ├── session.py
+│   │   └── __init__.py
+│   ├── schemas
+│   │   ├── audit_log.py
+│   │   ├── media.py
+│   │   ├── page.py
+│   │   ├── page_block.py
+│   │   ├── page_revision.py
+│   │   ├── site_setting.py
+│   │   ├── user.py
+│   │   └── __init__.py
+│   ├── static
+│   │   └── uploads
+│   ├── utils
+│   │   └── __init__.py
+│   ├── main.py
+│   └── __init__.py
+├── .env
+├── .gitignore
+├── docker-compose.yml
+├── Dockerfile
+├── folders.ps1
+├── README.md
+├── requirements.txt
+├── tree
+└── tree_generator.py
