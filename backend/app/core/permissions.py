@@ -3,13 +3,11 @@ from functools import lru_cache
 from fastapi import Depends, HTTPException, status
 from app.db.models.user import User
 
-# FIX 1: Import the base dependency from the dedicated file (auth_deps.py)
-# This breaks the circular dependency: permissions -> auth -> auth_deps
 from app.core.auth_deps import get_current_user
 
 
 # -------------------------
-# All available permissions (Renamed to prevent confusion with ROLE_PERMISSIONS)
+# All available permissions 
 # -------------------------
 PERMISSION_DESCRIPTIONS: Dict[str, str] = {
     "users.view": "View user accounts",
@@ -33,7 +31,7 @@ PERMISSION_DESCRIPTIONS: Dict[str, str] = {
 }
 
 # -------------------------
-# Role → allowed permissions (Using the set of keys from descriptions for "admin")
+# Role → allowed permissions
 # -------------------------
 ROLE_PERMISSIONS: Dict[str, Set[str]] = {
     "admin": set(PERMISSION_DESCRIPTIONS.keys()),
@@ -52,43 +50,47 @@ ROLE_PERMISSIONS: Dict[str, Set[str]] = {
 # -------------------------
 @lru_cache(maxsize=32)
 def get_role_permissions(role: str) -> Set[str]:
-    # NOTE: The self-import "from .permissions import get_role_permissions" was removed
     return ROLE_PERMISSIONS.get(role, set())
 
 def get_role_permissions_verbose(role: str) -> Dict[str, str]:
     perms = get_role_permissions(role)
-    # Use the correctly named dictionary
     return {p: PERMISSION_DESCRIPTIONS[p] for p in perms if p in PERMISSION_DESCRIPTIONS}
 
 
 # -------------------------
-# FastAPI dependency
+# FastAPI dependency (Enhanced with Role Guard)
 # -------------------------
-def require_permission(permission: Union[str, List[str]]): # Return type is `callable` not `Depends`
+def require_permission(permission: Union[str, List[str]]):
     perms = {permission} if isinstance(permission, str) else set(permission)
 
-    # FIX 2: Correctly define the inner dependency function to take the Depends
-    # as an argument. This is the standard, non-lazy method.
     def dep(current_user: User = Depends(get_current_user)) -> User:
         
-        # The following lazy import/call is WRONG and was removed:
-        # from app.api.routes.auth import get_current_user
-        # current_user: User = Depends(get_current_user)()
-
-        if current_user is None: # This check is redundant if get_current_user raises HTTPException, but harmless
-            raise HTTPException(
+        # This check for None is largely redundant since get_current_user raises 401,
+        # but it keeps the flow clear.
+        if current_user is None:
+             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Not authenticated",
             )
+        
+        # --- ENHANCEMENT: Role Guard to avoid AttributeError ---
+        # Checks if the 'role' attribute exists and is not None/empty string.
+        # This protects against possible bad data from the database.
+        if not getattr(current_user, "role", None):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, 
+                detail="User has no role assigned"
+            )
 
         role_perms = get_role_permissions(current_user.role)
+        
+        # Check if the required permissions are NOT entirely disjoint from the user's role permissions
         if perms.isdisjoint(role_perms):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Permission(s) {list(perms)} required",
             )
+            
         return current_user
 
-    # When using a function factory for a dependency, you return the inner function (dep),
-    # not Depends(dep). The caller uses Depends(require_permission(...)).
     return dep

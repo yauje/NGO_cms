@@ -80,4 +80,8 @@ folders.ps1
 tree_generator.py
 tree.Text
 
+node_modules
+
+frontend
+
 

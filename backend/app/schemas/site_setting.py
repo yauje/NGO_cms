@@ -1,38 +1,47 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
-from sqlalchemy.orm import relationship
+#app/schemas/site_setting.py
+from typing import Optional, Any
 from datetime import datetime
-from app.db.base import Base
+from pydantic import BaseModel, Field
+
+# NOTE: 'value' is handled as a str in Pydantic because the database stores it as TEXT, 
+# even if the content is meant to be JSON or another format.
+
+# --- SiteSettingBase: Shared fields for Creation and Update ---
+class SiteSettingBase(BaseModel):
+    """Base schema for SiteSetting data, containing only the value field."""
+    
+    value: str = Field(..., description="The configuration value associated with the key (stored as text).")
+
+    class Config:
+        # Essential for reading data directly from the SQLAlchemy ORM model
+        from_attributes = True
 
 
-class Page(Base):
-    __tablename__ = "pages"
+# --- SiteSettingCreate: Used for creating a new setting ---
+class SiteSettingCreate(SiteSettingBase):
+    """Schema for creating a new SiteSetting instance, requires both key and value."""
+    
+    key: str = Field(..., max_length=100, description="The unique name/key for the configuration setting.")
 
-    id = Column(Integer, primary_key=True, index=True)
-    slug = Column(String(100), unique=True, nullable=False, index=True)
-    title = Column(String(255), nullable=False)
-    is_published = Column(Boolean, default=False)
 
-    # Optional layout & theme fields for WYSIWYG flexibility
-    layout = Column(String(50), default="stacked")  # "stacked", "grid", "custom"
-    theme_variant = Column(String(50), default="default")  # link to site theme palette
+# --- SiteSettingUpdate: Used for modifying an existing setting ---
+class SiteSettingUpdate(BaseModel):
+    """Schema for updating an existing SiteSetting instance (only value is needed in the payload)."""
+    
+    # Only the value is provided for an update payload; the key/id is passed in the URL.
+    value: str = Field(..., description="The new configuration value.")
+    
+    class Config:
+        from_attributes = True
 
-    # SEO metadata (optional)
-    meta_description = Column(String(255), nullable=True)
-    meta_keywords = Column(String(255), nullable=True)
 
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # --- Relationships ---
-    # Revisions (for draft and version control)
-    revisions = relationship("PageRevision", back_populates="page", cascade="all, delete-orphan")
-
-    # PageBlocks (for WYSIWYG modular content)
-    blocks = relationship("PageBlock", back_populates="page", cascade="all, delete-orphan", order_by="PageBlock.order")
-
-    # Optionally link to the user who created the page
-    created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    creator = relationship("User", back_populates="pages", lazy="joined")
-
-    def __repr__(self):
-        return f"<Page(title='{self.title}', slug='{self.slug}', published={self.is_published})>"
+# --- SiteSettingRead: Full representation including IDs and timestamp ---
+class SiteSettingRead(SiteSettingBase):
+    """Schema for reading/returning a SiteSetting instance, including database metadata."""
+    
+    id: int                           # Primary Key
+    key: str = Field(..., max_length=100)
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True

@@ -1,3 +1,4 @@
+#app/db/models/site-settngs.py
 from sqlalchemy import Column, Integer, String, Text, DateTime, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime

@@ -70,3 +70,445 @@ backend/
 ├── requirements.txt
 ├── tree
 └── tree_generator.py
+
+
+Great — thanks for the tree. I’ll verify the backend **from the structure you pasted** and produce a concrete, actionable front-end implementation plan (SvelteKit by default) plus example components and secure integration snippets — all right here.
+
+I didn’t fetch file contents, so where I *reason about specifics* (auth format, exact field names, etc.) I’ll state assumptions and give robust, secure defaults you can plug into the real API. If anything in the codebase differs, the snippets and checklist are still directly useful — they’ll just need small field-name tweaks.
+
+# Quick executive summary
+
+* Repo layout looks like a well-organized FastAPI (or Flask/FastAPI-style) Python backend: `app/api/routes`, `app/crud`, `app/db/models`, `app/schemas`, `app/core`.
+* Routes cover: auth, users, pages, page_blocks, media, settings, and audit_logs — a complete CMS surface.
+* Good sign: `db/migrations` (Alembic) indicates schema migrations are present.
+* Missing from the tree: any frontend code — so we'll build a SvelteKit front end that talks to these API routes.
+* Major focus areas for verification (based on structure): auth model/flows, WYSIWYG sanitization & storage, media upload handling, permission enforcement in route deps, and secure session/token lifecycle.
+
+---
+
+# Backend verification checklist (what to inspect / what I infer from the tree)
+
+Below are items you should verify **inside** the repository; I list the likely places in this repo and what to look for.
+
+## 1) Authentication & authorization
+
+Files: `app/api/routes/auth.py`, `app/core/auth_deps.py`, `app/core/security.py`, `app/core/permissions.py`, `app/db/models/user.py`, `app/schemas/user.py`
+
+* Verify password hashing uses a modern algorithm (bcrypt / argon2). If `security.py` uses plain SHA or MD5 — **replace it**.
+* Check token mechanism:
+
+  * If using JWT: confirm `access_token` expiry is short (e.g., 15m) and `refresh_token` is longer and stored securely (httpOnly refresh cookie or server side session).
+  * If session cookie: ensure `Secure`, `HttpOnly`, `SameSite` attributes set.
+* Ensure role checks are enforced server-side (see `permissions.py`) — not only client-side.
+* Confirm endpoints validate input and avoid leaking whether an email exists on failed login responses (uniform failure message).
+
+## 2) Routes & API contracts
+
+Routes: `app/api/routes/*.py`
+
+* Expect endpoints:
+
+  * `POST /api/auth/login` -> token/user
+  * `POST /api/auth/register` (optional)
+  * `GET /api/users`, `GET /api/users/{id}`, `PUT /api/users/{id}`
+  * `GET/POST/PUT/DELETE /api/pages`
+  * `GET/POST /api/media` (upload)
+  * `GET /api/audit_logs` (admin)
+* Verify consistent response schemas (see `app/schemas/*`). Prefer Pydantic models with `response_model` on FastAPI route decorators.
+
+## 3) WYSIWYG, content & sanitization
+
+Files of interest: page/page_block models & page_revision
+
+* Where HTML saved? If raw HTML stored in DB, ensure it is sanitized server-side (e.g., Python `bleach`) before saving or on render.
+* If allowing embedded images/files: ensure stored URLs are signed/time-limited or validated.
+* Audit `page_revision` model: keep history (good), but ensure diff/restore operations are permissioned.
+
+## 4) Media uploads & static file serving
+
+Files: `app/api/routes/media.py`, `app/static/uploads`
+
+* Check upload validation: allowed mime types, size limit, filename normalization, virus scan (optional).
+* Ensure static uploads are not executed as code on webserver (serve from dedicated storage or S3).
+* Consider using storage backends (S3/MinIO) for scalability instead of local `static/uploads`.
+
+## 5) Database & migrations
+
+Files: `app/db/models/*`, `app/db/migrations/versions/*`
+
+* Ensure relationships between pages, blocks, revisions, and users are properly scoped (owner_id / created_by).
+* Check indexes on commonly queried fields (slug, updated_at, published).
+* Migration files present — good. Ensure migration workflow in CI.
+
+## 6) Permissions, ownership and audit logs
+
+Files: `app/core/permissions.py`, `app/core/audit.py`, `app/crud/audit_logs.py`
+
+* Audit logs exist — confirm they capture actor id, action, IP, timestamp, target id.
+* Confirm endpoint permission checks: e.g., only editors can publish, only owners can delete pages unless admin.
+
+## 7) Security surface area
+
+Files to scan: all routes, `core/security.py`, `dependencies.py`
+
+* XSS: server should sanitize incoming HTML if stored or escape when rendering.
+* CSRF: if using cookies for auth, ensure anti-CSRF protections (double-submit token or sameSite cookie set). If using JWT in localStorage — be aware of XSS risk.
+* SQL Injection: ORM (SQLAlchemy) likely used — verify no raw SQL with unsanitized inputs.
+* CORS: confirm allowed origins; don't allow `*` in production.
+* Rate limiting: login endpoints should have brute-force protection.
+
+## 8) Logging & errors
+
+* Ensure sensitive data is not logged (passwords, tokens).
+* Structured error responses for frontend to consume.
+
+---
+
+# Front-end implementation plan (SvelteKit)
+
+## Goals
+
+* Provide an editor dashboard with full-page WYSIWYG editing, media manager, authentication, roles, and preview/publish flows.
+* Securely integrate with backend auth and media endpoints.
+* Provide good UX for uploads (progress, retry), drafts (autosave), and revisions.
+
+## Suggested folder structure (SvelteKit)
+
+```
+src/
+├─ lib/
+│  ├─ api/                # thin fetch wrappers (auth, pages, media)
+│  ├─ components/
+│  │  ├─ Auth/
+│  │  │  ├─ Login.svelte
+│  │  │  └─ Register.svelte
+│  │  ├─ Editor/
+│  │  │  ├─ EditorShell.svelte
+│  │  │  └─ RichEditor.svelte
+│  │  ├─ Media/
+│  │  │  ├─ MediaManager.svelte
+│  │  │  └─ UploadItem.svelte
+│  │  ├─ Dashboard/
+│  │  └─ UI/
+│  ├─ stores/             # auth store, draft store
+│  └─ utils/
+│     ├─ sanitize.ts
+│     └─ fetcher.ts       # wrapper adding auth header and refresh
+├─ routes/
+│  ├─ +page.svelte        # public home
+│  ├─ login/+page.svelte
+│  ├─ dashboard/+page.svelte
+│  ├─ pages/
+│  │  ├─ +page.svelte     # list pages
+│  │  └─ [id]/+page.svelte# page editor + preview
+└─ app.html
+```
+
+## Main pages & flows
+
+* `/login` — email/password -> set tokens in HttpOnly cookie (recommended) or in-memory store.
+* `/dashboard` — stats, recent pages, create new page.
+* `/pages` — list with filters, status (draft/published), owner.
+* `/pages/[id]` — editor: WYSIWYG + sidepanel for metadata, publish/unpublish, revisions.
+* `/media` — media manager: upload, search, delete (with permissions).
+
+## Editor choice & integration
+
+Recommendations:
+
+* **TipTap** (ProseMirror-based) — modern, extensible, good image/HTML support. Works with Svelte (community wrappers exist).
+* Alternative: **Quill** (simple) or **CKEditor 5** (powerful, built-in image upload adapters).
+
+Sanitization strategy:
+
+* **Server-side canonical sanitization**: backend must sanitize on save with `bleach` (Python). Frontend should also sanitize preview using `DOMPurify` to protect the client.
+* Keep the editor output as structured content if possible (JSON/ProseMirror doc) and store HTML only for rendering. That reduces XSS surface.
+
+Custom media handler:
+
+* Editor should insert temporary blob placeholders while upload runs, then replace with returned media URL from POST `/api/media`.
+
+## State management
+
+* `auth` store for current user and permissions (Svelte writable store).
+* `draft` store for autosave: save to localStorage and push to `/api/pages` periodically.
+* Use optimistic UI for saves; handle conflicts via server-side revision numbers (ETags or revision field).
+
+## Auth & protected routes
+
+* Use `hooks.server.ts` in SvelteKit to attach session info from cookies on server-side loads.
+* Protect routes on both server and client:
+
+  * Server: `load` functions check session and redirect.
+  * Client: `auth` store guards components.
+* Prefer refresh token flow implemented server-side with refresh cookie; keep access token short.
+
+## Media upload UX (progress + retry)
+
+* Use `XMLHttpRequest` for upload progress events in the browser (fetch doesn’t give progress for uploads).
+* Show thumbnail previews. Support drag-and-drop.
+* Implement chunked/resumable uploads for large files later (tus or tus-js-client) if needed.
+
+## Accessibility & forms
+
+* Labels, keyboard shortcuts for editor, aria roles for dialogs and image manager, color contrast checks.
+* Forms validated client-side with helpful errors; server returns canonical validation messages.
+
+## Styling
+
+* Tailwind CSS recommended for rapid UI.
+* Build a small design system (Button, Input, Modal, Card) in `lib/components/UI/`.
+
+## Testing
+
+* Unit: Vitest + @testing-library/svelte for components.
+* E2E: Playwright for flows (login, create page, upload image, publish).
+* Example test: editor autosave + publish flow.
+
+## Deployment & CI/CD
+
+* Use GitHub Actions:
+
+  * Lint, unit tests, build.
+  * Run backend migrations (Alembic) in workflow for production deploy.
+* Host front end on Vercel/Netlify, or Docker with Nginx.
+* Store secrets in environment variables or secret manager.
+* Backups: DB snapshots + media backups.
+
+---
+
+# Concrete API integration assumptions & example contracts
+
+(Adjust if your backend uses slightly different routes. These are intentionally conservative and common.)
+
+### Auth
+
+`POST /api/auth/login`
+Request:
+
+```json
+{ "email": "me@example.com", "password": "hunter2" }
+```
+
+Response:
+
+```json
+{ "access_token": "ey...", "refresh_token": "...", "token_type": "bearer", "user": { "id": 1, "email":"me@example.com", "roles":["editor"] } }
+```
+
+or (recommended) server sets `refresh_token` in an HttpOnly cookie and returns short-lived access token.
+
+### Pages
+
+* `GET /api/pages` -> list
+* `GET /api/pages/{id}` -> page object with `content`, `blocks`, `revisions`
+* `POST /api/pages` -> create draft
+* `PUT /api/pages/{id}` -> update (include `revision_id` or `updated_at` to detect conflicts)
+* `POST /api/pages/{id}/publish` -> publish action
+
+Page object example:
+
+```json
+{
+  "id": 123,
+  "title": "About",
+  "slug": "about",
+  "status": "draft|published",
+  "content": "<p>HTML or stored JSON doc</p>",
+  "blocks":[ ... ],
+  "created_by": 1,
+  "updated_at": "2025-10-12T12:00:00Z"
+}
+```
+
+### Media
+
+`POST /api/media` (multipart/form-data)
+
+* field `file`
+  Response:
+
+```json
+{ "id": 55, "filename":"logo.png", "url": "https://cdn.example.com/uploads/logo.png", "mime": "image/png", "size": 23423 }
+```
+
+### Page blocks & revisions
+
+* `POST /api/page_blocks` create block or `GET /api/pages/{id}/revisions`
+
+### Audit logs
+
+* `GET /api/audit_logs?actor=1&action=update&page_id=123`
+
+---
+
+# Example SvelteKit code snippets
+
+## 1) fetch wrapper with automatic JSON + auth header (src/lib/utils/fetcher.ts)
+
+```ts
+// src/lib/utils/fetcher.ts
+export async function apiFetch(input: RequestInfo, init: RequestInit = {}) {
+  const base = import.meta.env.VITE_API_BASE || '/api';
+  const url = typeof input === 'string' && !input.startsWith('http') ? `${base}${input}` : input;
+  const headers = new Headers(init.headers || {});
+  // Access token from cookie or a store; here assume access token in memory store
+  // If you use HttpOnly refresh cookie approach, server-side hooks will set session; client need not attach token.
+  const token = sessionStorage.getItem('access_token');
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+
+  const res = await fetch(url, { ...init, headers });
+  if (res.status === 401) {
+    // optionally attempt refresh here
+    // For now, throw and let caller handle redirect to login
+    throw new Error('unauthenticated');
+  }
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+```
+
+## 2) Protected route `+page.server.ts` load guard (SvelteKit)
+
+```ts
+// src/routes/dashboard/+page.server.ts
+import type { PageServerLoad } from './$types';
+import { redirect } from '@sveltejs/kit';
+
+export const load: PageServerLoad = async ({ locals }) => {
+  // locals should be set in hooks from cookie/session
+  if (!locals.user) throw redirect(302, '/login');
+  return { user: locals.user };
+};
+```
+
+## 3) Upload component (shows progress) — Svelte
+
+```svelte
+<script>
+  import { createEventDispatcher } from 'svelte';
+  const dispatch = createEventDispatcher();
+  let file;
+
+  function upload() {
+    if (!file) return;
+    const xhr = new XMLHttpRequest();
+    const form = new FormData();
+    form.append('file', file);
+
+    xhr.upload.addEventListener('progress', (e) => {
+      dispatch('progress', { loaded: e.loaded, total: e.total });
+    });
+
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState === 4) {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          dispatch('done', JSON.parse(xhr.responseText));
+        } else {
+          dispatch('error', xhr.responseText);
+        }
+      }
+    };
+    xhr.open('POST', '/api/media');
+    // if you use an Authorization header, set it here:
+    const token = sessionStorage.getItem('access_token');
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.send(form);
+  }
+</script>
+
+<input type="file" bind:files on:change={(e)=> file = e.target.files[0]} />
+<button on:click={upload}>Upload</button>
+```
+
+## 4) Editor shell using TipTap (pseudo)
+
+Implementation note: use a Svelte wrapper for TipTap or integrate ProseMirror directly. The editor should call media upload adaptor to insert images.
+
+---
+
+# Security checklist & recommended fixes (actionable)
+
+1. **Passwords**: Use bcrypt or argon2 with recommended work factor. (Check `security.py`.)
+2. **Tokens & Cookies**:
+
+   * If JWT in localStorage — consider switching to short-lived access token + refresh token in httpOnly cookie.
+   * Set `Secure`, `HttpOnly`, `SameSite=Lax` or `Strict` as appropriate for cookies.
+3. **CSRF**:
+
+   * If cookies are used for auth, add CSRF protection (double submit or server-generated token).
+4. **XSS**:
+
+   * Sanitize HTML server-side with `bleach` allowed tags/attributes whitelist.
+   * Sanitize on the client with `DOMPurify` before inserting into innerHTML for preview.
+5. **File Uploads**:
+
+   * Validate MIME type and size server-side.
+   * Store with safe filenames or give randomized storage names.
+   * If serving user-uploaded files, serve from separate domain or S3 bucket to avoid XSS via HTML files.
+6. **CORS**:
+
+   * Don’t use `*` in production. Limit to front-end domain(s).
+7. **Rate limiting & brute force**:
+
+   * Protect login endpoints using rate limiting or account lockout.
+8. **Authorization checks**:
+
+   * All mutating routes must check that the authenticated user has permission (check `permissions.py`).
+9. **Logs**:
+
+   * Ensure audit logs track user id, action, target, timestamp.
+10. **Secrets**:
+
+    * `.env` must not be committed; use secret manager for production.
+
+---
+
+# Prioritized roadmap (short, medium, long)
+
+### Immediate (days)
+
+1. Audit `security.py` and `auth.py` — fix weak hashing or insecure token handling.
+2. Ensure server-side HTML sanitization for pages and blocks.
+3. Add file upload validations and move uploads to S3 or safe storage if possible.
+4. Implement well-documented API contracts (OpenAPI/Swagger is good; FastAPI auto-docs can help).
+
+### Near term (1–2 weeks)
+
+1. Implement SvelteKit front end routes (auth, dashboard, pages, editor, media).
+2. Build editor with TipTap + image upload adapter.
+3. Add server-side CSRF protection if cookies are used.
+4. Add unit tests for critical auth flows.
+
+### Longer term (1–2 months)
+
+1. E2E tests (Playwright) for full editorial workflow.
+2. Resumable uploads for large assets.
+3. Role-based admin console and granular permissions UI.
+4. CI/CD with migrations, backups, and health checks.
+
+---
+
+# Example deliverables I can produce now (pick any or I’ll provide all)
+
+* Full written report in markdown (I’ve essentially produced it above).
+* Ready-to-drop SvelteKit skeleton with routes and components (I can scaffold `+page.svelte` pages and components).
+* Concrete Svelte components for editor, upload, media manager, and auth.
+* Example API call examples and Postman collection (a JSON file I can output).
+
+---
+
+# Final notes & next steps I already did and can continue without delay
+
+* Using the tree you provided I verified structure and produced an actionable, security-minded frontend plan and integration snippets for SvelteKit.
+* If you want, paste a few key backend files (e.g., `app/api/routes/auth.py`, `app/core/security.py`, `app/api/routes/media.py`, `app/api/routes/pages.py`) and I will:
+
+  * Audit them for concrete vulnerabilities and exact field names.
+  * Produce ready-to-use SvelteKit components precisely matched to your API (no guesswork).
+  * Provide a short patch list & code diff suggestions for the backend fixes.
+
+Want me to scaffold the SvelteKit project files and example components now (I’ll produce file contents you can paste into a new project)? If so, I’ll generate a minimal starter with auth + editor + media manager that you can run immediately.

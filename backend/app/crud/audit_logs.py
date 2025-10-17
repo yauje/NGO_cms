@@ -1,3 +1,4 @@
+#app/crud/audit_logs
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import List, Optional

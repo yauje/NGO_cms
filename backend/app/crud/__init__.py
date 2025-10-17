@@ -1,3 +1,4 @@
+#app/crud/__init__.py
 from app.crud.audit_logs import crud_audit_log
 from app.crud.media import crud_media
 from app.crud.pages import crud_page

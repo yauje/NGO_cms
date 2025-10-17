@@ -1,40 +1,29 @@
 from datetime import timedelta, datetime
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Cookie
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import jwt, JWTError
-from passlib.context import CryptContext
 from pydantic import BaseModel, EmailStr
+
 from app.db.session import get_db
 from app.db.models.user import User
 from app.schemas.user import UserCreate, UserRead
 from app.core.config import settings
 from app.core.permissions import get_role_permissions_verbose
-from app.core.auth_deps import get_current_user, SECRET_KEY, ALGORITHM
+from app.core.auth_deps import get_current_user, ALGORITHM
+from app.core.security import (
+    create_access_token,
+    create_refresh_token,
+    get_password_hash,
+    verify_password,
+)
 from app.core.audit import record_audit_log
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-# ==========================
-# 🔐 CONFIGURATION
-# ==========================
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 1 day
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+ACCESS_TOKEN_EXPIRE_MINUTES = 15  # short-lived access token
 
-# ==========================
-# 🔧 HELPERS
-# ==========================
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-def create_access_token(data: dict, expires_delta: timedelta | None = None):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 # ==========================
 # 🧍 ROUTES
@@ -42,7 +31,6 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
 
 @router.get("/me")
 async def get_me(current_user: User = Depends(get_current_user)):
-    """Return current user info along with human-readable permissions"""
     permissions = get_role_permissions_verbose(current_user.role)
     return {
         "id": current_user.id,
@@ -51,12 +39,12 @@ async def get_me(current_user: User = Depends(get_current_user)):
         "is_active": current_user.is_active,
         "created_at": current_user.created_at,
         "updated_at": current_user.updated_at,
-        "permissions": permissions
+        "permissions": permissions,
     }
+
 
 @router.post("/register", response_model=UserRead)
 async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
-    """Create a new user account with audit logging"""
     existing_user = await User.get_by_email(db, user_in.email)
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -66,10 +54,9 @@ async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db))
         db, email=user_in.email, hashed_password=hashed_pw, role=user_in.role
     )
 
-    # Audit log
     await record_audit_log(
         db=db,
-        user=new_user,  # the newly created user
+        user=new_user,
         action="register",
         resource_type="user",
         resource_id=new_user.id,
@@ -77,13 +64,19 @@ async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db))
 
     return new_user
 
+
 class Token(BaseModel):
     access_token: str
     token_type: str
 
+
 @router.post("/login", response_model=Token)
-async def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
-    """Authenticate user and return JWT token with audit logging"""
+async def login_user(
+    response: Response,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: AsyncSession = Depends(get_db),
+):
+    """Authenticate user and return access + refresh tokens"""
     user = await User.get_by_email(db, email=form_data.username)
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect email or password")
@@ -91,9 +84,30 @@ async def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: Async
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Inactive user")
 
-    access_token = create_access_token(data={"sub": user.email})
+    # Issue tokens
+    access_token = create_access_token(
+        data={"sub": user.email, "id": user.id, "role": user.role},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+    refresh_token = create_refresh_token(
+        data={"sub": user.email, "id": user.id, "role": user.role}
+    )
 
-    # Audit log
+    # Store refresh token in HttpOnly cookie
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=False,  # set True in production
+        samesite="lax",
+        max_age=7 * 24 * 60 * 60,
+    )
+
+    # Update last_token_issue for revocation
+    user.last_token_issue = datetime.utcnow()
+    db.add(user)
+    await db.commit()
+
     await record_audit_log(
         db=db,
         user=user,
@@ -104,28 +118,75 @@ async def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: Async
 
     return {"access_token": access_token, "token_type": "bearer"}
 
+
+@router.post("/refresh", response_model=Token)
+async def refresh_token(
+    refresh_token: str = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Refresh access token using HttpOnly refresh token"""
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Missing refresh token")
+
+    try:
+        payload = jwt.decode(refresh_token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        email = payload.get("sub")
+        token_iat = payload.get("iat")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+
+    user = await User.get_by_email(db, email=email)
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="Invalid user")
+
+    if token_iat < user.last_token_issue.timestamp():
+        raise HTTPException(status_code=401, detail="Refresh token revoked")
+
+    new_access_token = create_access_token(
+        data={"sub": user.email, "id": user.id, "role": user.role},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+
+    return {"access_token": new_access_token, "token_type": "bearer"}
+
+
 @router.post("/logout")
-async def logout_user(request: Request):
-    """Logout endpoint (client-side token discard)"""
-    return {"message": "Logout successful. Please discard your token."}
+async def logout_user(
+    response: JSONResponse,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Logout user and revoke refresh tokens"""
+    response = JSONResponse(content={"message": "Logout successful"})
+    response.delete_cookie("refresh_token")
+
+    current_user.last_token_issue = datetime.utcnow()
+    db.add(current_user)
+    await db.commit()
+
+    return response
+
 
 class PasswordResetRequest(BaseModel):
     email: EmailStr
+
 
 class PasswordResetConfirm(BaseModel):
     token: str
     new_password: str
 
+
 @router.post("/reset-password/request")
-async def request_password_reset(data: PasswordResetRequest, db: AsyncSession = Depends(get_db)):
-    """Generate a password reset token with audit logging"""
+async def request_password_reset(
+    data: PasswordResetRequest, db: AsyncSession = Depends(get_db)
+):
     user = await User.get_by_email(db, email=data.email)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     token = create_access_token({"sub": user.email}, timedelta(minutes=30))
 
-    # Audit log
+    # TODO: Send token via email in production instead of returning in response
     await record_audit_log(
         db=db,
         user=user,
@@ -136,11 +197,13 @@ async def request_password_reset(data: PasswordResetRequest, db: AsyncSession = 
 
     return {"message": "Password reset token generated", "reset_token": token}
 
+
 @router.post("/reset-password/confirm")
-async def confirm_password_reset(data: PasswordResetConfirm, db: AsyncSession = Depends(get_db)):
-    """Reset password using token with audit logging"""
+async def confirm_password_reset(
+    data: PasswordResetConfirm, db: AsyncSession = Depends(get_db)
+):
     try:
-        payload = jwt.decode(data.token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(data.token, settings.SECRET_KEY, algorithms=[ALGORITHM])
         email = payload.get("sub")
     except JWTError:
         raise HTTPException(status_code=400, detail="Invalid or expired token")
@@ -154,7 +217,6 @@ async def confirm_password_reset(data: PasswordResetConfirm, db: AsyncSession = 
     await db.commit()
     await db.refresh(user)
 
-    # Audit log
     await record_audit_log(
         db=db,
         user=user,
@@ -162,5 +224,10 @@ async def confirm_password_reset(data: PasswordResetConfirm, db: AsyncSession = 
         resource_type="user",
         resource_id=user.id,
     )
+
+    # Revoke all refresh tokens on password change
+    user.last_token_issue = datetime.utcnow()
+    db.add(user)
+    await db.commit()
 
     return {"message": "Password reset successful"}

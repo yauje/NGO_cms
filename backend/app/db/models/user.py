@@ -1,3 +1,4 @@
+#app/db/models/user.py
 from sqlalchemy import Column, Integer, String, Boolean, DateTime
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -13,18 +14,43 @@ class User(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # -------------------------
+    # Token revocation field
+    # -------------------------
+    last_token_issue = Column(DateTime, nullable=True, default=datetime.utcnow)
 
+    # -------------------------
     # Relationships
-    page_revisions = relationship("PageRevision", back_populates="created_by", cascade="all, delete-orphan")
-    uploads = relationship("Media", back_populates="uploaded_by", cascade="all, delete-orphan")
-    audit_logs = relationship("AuditLog", back_populates="user", cascade="all, delete-orphan")
+    # -------------------------
+    page_revisions = relationship(
+        "PageRevision",
+        back_populates="created_by",
+        cascade="all, delete-orphan"
+    )
+    uploads = relationship(
+        "Media",
+        back_populates="uploaded_by",
+        cascade="all, delete-orphan"
+    )
+    audit_logs = relationship(
+        "AuditLog",
+        back_populates="user",
+        cascade="all, delete-orphan"
+    )
 
     def __repr__(self):
-        return f"<User(id={self.id}, email='{self.email}', role='{self.role}', is_active={self.is_active})>"
+        return (
+            f"<User(id={self.id}, email='{self.email}', "
+            f"role='{self.role}', is_active={self.is_active})>"
+        )
 
+    # -------------------------
     # Utility methods for auth routes
+    # -------------------------
     @classmethod
     async def get_by_email(cls, db, email: str):
+        """Fetch a user by email."""
         from sqlalchemy.future import select
         result = await db.execute(select(cls).filter_by(email=email))
         return result.scalars().first()

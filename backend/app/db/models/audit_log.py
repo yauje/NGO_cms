@@ -1,3 +1,4 @@
+#app/db/models/audit_logs.py
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
