@@ -1,5 +1,5 @@
 from datetime import timedelta, datetime
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Cookie
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Cookie
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,15 +22,18 @@ from app.core.audit import record_audit_log
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-ACCESS_TOKEN_EXPIRE_MINUTES = 15  # short-lived access token
+ACCESS_TOKEN_EXPIRE_MINUTES = 15  # Short-lived access token for security
 
 
 # ==========================
-# 🧍 ROUTES
+# 🧍 USER ROUTES
 # ==========================
 
 @router.get("/me")
 async def get_me(current_user: User = Depends(get_current_user)):
+    """
+    Returns the currently authenticated user's info with verbose permissions.
+    """
     permissions = get_role_permissions_verbose(current_user.role)
     return {
         "id": current_user.id,
@@ -43,8 +46,12 @@ async def get_me(current_user: User = Depends(get_current_user)):
     }
 
 
-@router.post("/register", response_model=UserRead)
+@router.post("/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
 async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
+    """
+    Register a new user. Ensures email is unique.
+    Audit log records the registration event.
+    """
     existing_user = await User.get_by_email(db, user_in.email)
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -55,16 +62,18 @@ async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db))
     )
 
     await record_audit_log(
-        db=db,
-        user=new_user,
         action="register",
         resource_type="user",
         resource_id=new_user.id,
+        db=db
     )
 
     return new_user
 
 
+# --------------------------
+# TOKEN SCHEMAS
+# --------------------------
 class Token(BaseModel):
     access_token: str
     token_type: str
@@ -76,7 +85,11 @@ async def login_user(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ):
-    """Authenticate user and return access + refresh tokens"""
+    """
+    Authenticate user and return short-lived access token and long-lived refresh token.
+    Stores refresh token in HttpOnly cookie.
+    Records login audit log.
+    """
     user = await User.get_by_email(db, email=form_data.username)
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect email or password")
@@ -84,7 +97,7 @@ async def login_user(
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Inactive user")
 
-    # Issue tokens
+    # Create tokens
     access_token = create_access_token(
         data={"sub": user.email, "id": user.id, "role": user.role},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
@@ -103,17 +116,18 @@ async def login_user(
         max_age=7 * 24 * 60 * 60,
     )
 
-    # Update last_token_issue for revocation
+    # Update last_token_issue for revocation control
     user.last_token_issue = datetime.utcnow()
     db.add(user)
     await db.commit()
 
+    # Audit log
     await record_audit_log(
-        db=db,
-        user=user,
         action="login",
         resource_type="user",
         resource_id=user.id,
+        user_id=user.id,
+        db=db
     )
 
     return {"access_token": access_token, "token_type": "bearer"}
@@ -124,7 +138,10 @@ async def refresh_token(
     refresh_token: str = Cookie(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """Refresh access token using HttpOnly refresh token"""
+    """
+    Refresh access token using HttpOnly refresh token.
+    Checks token revocation and expiration.
+    """
     if not refresh_token:
         raise HTTPException(status_code=401, detail="Missing refresh token")
 
@@ -156,7 +173,10 @@ async def logout_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Logout user and revoke refresh tokens"""
+    """
+    Logout user by deleting the refresh token cookie and updating last_token_issue
+    for revocation purposes.
+    """
     response = JSONResponse(content={"message": "Logout successful"})
     response.delete_cookie("refresh_token")
 
@@ -167,6 +187,9 @@ async def logout_user(
     return response
 
 
+# --------------------------
+# PASSWORD RESET
+# --------------------------
 class PasswordResetRequest(BaseModel):
     email: EmailStr
 
@@ -180,19 +203,22 @@ class PasswordResetConfirm(BaseModel):
 async def request_password_reset(
     data: PasswordResetRequest, db: AsyncSession = Depends(get_db)
 ):
+    """
+    Request a password reset. Generates a temporary token for resetting.
+    Records audit log.
+    """
     user = await User.get_by_email(db, email=data.email)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     token = create_access_token({"sub": user.email}, timedelta(minutes=30))
 
-    # TODO: Send token via email in production instead of returning in response
+    # TODO: send via email in production
     await record_audit_log(
-        db=db,
-        user=user,
         action="password_reset_request",
         resource_type="user",
         resource_id=user.id,
+        db=db
     )
 
     return {"message": "Password reset token generated", "reset_token": token}
@@ -202,6 +228,10 @@ async def request_password_reset(
 async def confirm_password_reset(
     data: PasswordResetConfirm, db: AsyncSession = Depends(get_db)
 ):
+    """
+    Confirm password reset. Updates hashed password and revokes all refresh tokens.
+    Records audit log.
+    """
     try:
         payload = jwt.decode(data.token, settings.SECRET_KEY, algorithms=[ALGORITHM])
         email = payload.get("sub")
@@ -218,14 +248,13 @@ async def confirm_password_reset(
     await db.refresh(user)
 
     await record_audit_log(
-        db=db,
-        user=user,
         action="password_reset_confirm",
         resource_type="user",
         resource_id=user.id,
+        db=db
     )
 
-    # Revoke all refresh tokens on password change
+    # Revoke all refresh tokens
     user.last_token_issue = datetime.utcnow()
     db.add(user)
     await db.commit()

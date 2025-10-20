@@ -38,7 +38,7 @@ class CRUDSiteSetting:
         if performed_by:
             await record_audit_log(
                 db=db,
-                user_id=performed_by,
+                user_id=performed_by,  # Pass user_id instead of User object
                 action="create",
                 resource_type="site_setting",
                 resource_id=db_obj.id,

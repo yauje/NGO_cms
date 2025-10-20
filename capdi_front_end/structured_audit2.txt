@@ -1,0 +1,80 @@
+capdi_front_end/
+├── .svelte-kit
+│   ├── generated
+│   │   ├── client
+│   │   │   ├── nodes
+│   │   │   │   ├── 0.js
+│   │   │   │   ├── 1.js
+│   │   │   │   ├── 2.js
+│   │   │   │   ├── 3.js
+│   │   │   │   ├── 4.js
+│   │   │   │   ├── 5.js
+│   │   │   │   └── 6.js
+│   │   │   ├── app.js
+│   │   │   └── matchers.js
+│   │   ├── server
+│   │   │   └── internal.js
+│   │   ├── root.js
+│   │   └── root.svelte
+│   ├── types
+│   │   ├── src
+│   │   │   └── routes
+│   │   │       ├── (admin)
+│   │   │       ├── (auth)
+│   │   │       │   └── login
+│   │   │       ├── admin
+│   │   │       │   ├── $types.d.ts
+│   │   │       │   └── proxy+layout.ts
+│   │   │       ├── auth
+│   │   │       │   └── login
+│   │   │       │       └── $types.d.ts
+│   │   │       ├── dashboard
+│   │   │       │   └── $types.d.ts
+│   │   │       ├── $types.d.ts
+│   │   │       └── proxy+layout.ts
+│   │   └── route_meta_data.json
+│   ├── ambient.d.ts
+│   ├── non-ambient.d.ts
+│   └── tsconfig.json
+├── src
+│   ├── lib
+│   │   ├── assets
+│   │   │   └── favicon.svg
+│   │   ├── stores
+│   │   │   └── auth.ts
+│   │   ├── api.ts
+│   │   └── index.ts
+│   ├── routes
+│   │   ├── admin
+│   │   │   ├── dashboard
+│   │   │   ├── +layout.ts
+│   │   │   └── +page.svelte
+│   │   ├── auth
+│   │   │   └── login
+│   │   │       └── +page.svelte
+│   │   ├── dashboard
+│   │   │   └── +page.svelte
+│   │   ├── +layout.svelte
+│   │   ├── +layout.ts
+│   │   └── +page.svelte
+│   ├── app.css
+│   ├── app.d.ts
+│   └── app.html
+├── static
+│   ├── hero image.jpg
+│   └── robots.txt
+├── .env
+├── .gitignore
+├── .npmrc
+├── .prettierignore
+├── .prettierrc
+├── eslint.config.js
+├── front end tree
+├── package-lock.json
+├── package.json
+├── README.md
+├── structure_audit.txt
+├── svelte.config.js
+├── tree_generator.py
+├── tsconfig.json
+└── vite.config.ts

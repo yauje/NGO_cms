@@ -35,7 +35,8 @@ async def create_page(
     dependencies=[Depends(require_permission("content.view"))]
 )
 async def list_pages(db: AsyncSession = Depends(get_db)):
-    return await crud_page.get_all(db)
+    """List all pages in descending order of creation."""
+    return await crud_page.get_multi(db)
 
 
 # -------------------------

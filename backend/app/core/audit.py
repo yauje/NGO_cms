@@ -5,10 +5,9 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.db.models.user import User
 from app.crud.audit_logs import crud_audit_log
 from app.schemas.audit_log import AuditLogCreate
-from app.core.auth_deps import get_current_user  # <- use core, not routes
+from app.core.auth_deps import get_current_user
 
 
 async def record_audit_log(
@@ -16,7 +15,7 @@ async def record_audit_log(
     resource_type: str,
     resource_id: int,
     db: AsyncSession,
-    user: User | None = None,
+    user_id: int,
 ):
     """
     Record an audit log entry.
@@ -26,14 +25,10 @@ async def record_audit_log(
         resource_type (str): Type of the resource (e.g. "user", "page", "setting").
         resource_id (int): ID of the affected resource.
         db (AsyncSession): Database session (FastAPI dependency).
-        user (User | None): The acting user (optional). If not provided, raise error.
+        user_id (int): The ID of the acting user.
     """
-
-    if not user:
-        raise ValueError("User must be provided when recording audit logs manually.")
-
     audit_entry = AuditLogCreate(
-        user_id=user.id,
+        user_id=user_id,
         action=action,
         resource_type=resource_type,
         resource_id=resource_id,
@@ -50,7 +45,7 @@ async def audit_logger(
     resource_type: str,
     resource_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user = Depends(get_current_user),
 ):
     """
     Dependency wrapper for inline usage inside routes.
@@ -63,5 +58,5 @@ async def audit_logger(
         resource_type=resource_type,
         resource_id=resource_id,
         db=db,
-        user=current_user,
+        user_id=current_user.id,
     )

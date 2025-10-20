@@ -21,14 +21,16 @@ class CRUDMedia:
     # -------------------------
     async def get_multi(self, db: AsyncSession, skip: int = 0, limit: int = 100) -> List[Media]:
         result = await db.execute(
-            select(Media).order_by(Media.created_at.desc()).offset(skip).limit(limit)
+            select(Media).order_by(Media.uploaded_at.desc()).offset(skip).limit(limit)
         )
         return result.scalars().all()
 
     # -------------------------
     # CREATE
     # -------------------------
-    async def create(self, db: AsyncSession, obj_in: MediaCreate, performed_by: int | None = None) -> Media:
+    async def create(
+        self, db: AsyncSession, obj_in: MediaCreate, performed_by: int | None = None
+    ) -> Media:
         db_obj = Media(**obj_in.model_dump())
         db.add(db_obj)
         await db.commit()
@@ -48,7 +50,9 @@ class CRUDMedia:
     # -------------------------
     # DELETE
     # -------------------------
-    async def remove(self, db: AsyncSession, id: int, performed_by: int | None = None) -> Optional[Media]:
+    async def delete(
+        self, db: AsyncSession, id: int, performed_by: int | None = None
+    ) -> Optional[Media]:
         obj = await self.get(db, id)
         if not obj:
             return None
